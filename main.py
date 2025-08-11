@@ -81,6 +81,10 @@ def analyze_political_bias(article_text: str) -> str | None:
         print(f"Error during Gemini API call: {e}")
         return None
 
+@app.get("/")
+async def health_check():
+    return {"status": "healthy"}
+
 @app.post("/analyze_bias")
 async def analyze_bias(request: Request):
     """
