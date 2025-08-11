@@ -28,14 +28,25 @@ def get_article_content(url: str) -> str | None:
     Fetches and extracts the main content of an article from a given URL.
     """
     try:
-        response = requests.get(url, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+        }
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
         selectors = [
             {'tag': 'div', 'class_': 'story-element'},
             {'tag': 'div', 'class_': 'story-body'},
-            {'tag': 'article', 'class_': None}
+            {'tag': 'article', 'class_': None},
+            {'tag': 'div', 'class_': 'article-body'},
+            {'tag': 'div', 'class_': 'content'},
+            {'tag': 'main', 'class_': None},
+            {'tag': 'section', 'class_': 'article-content'}
         ]
         
         article_content = []
@@ -52,10 +63,15 @@ def get_article_content(url: str) -> str | None:
         return "\n".join(article_content) if article_content else None
     except requests.exceptions.RequestException as e:
         print(f"Request to {url} failed: {e}")
-        return None
+        if "401" in str(e) or "403" in str(e):
+            raise HTTPException(status_code=422, detail=f"Website blocked access to URL: {url}. Try a different news source.")
+        elif "404" in str(e):
+            raise HTTPException(status_code=404, detail=f"Article not found at URL: {url}")
+        else:
+            raise HTTPException(status_code=422, detail=f"Failed to fetch article from URL: {url}")
     except Exception as e:
         print(f"An unexpected error occurred while processing {url}: {e}")
-        return None
+        raise HTTPException(status_code=500, detail=f"Error processing article content from {url}")
 
 def analyze_political_bias(article_text: str) -> str | None:
     """
@@ -63,7 +79,7 @@ def analyze_political_bias(article_text: str) -> str | None:
     """
     if not GOOGLE_API_KEY:
         print("Google API key not configured. Skipping bias analysis.")
-        return None
+        raise HTTPException(status_code=500, detail="Google API key not configured. Please set GOOGLE_API_KEY environment variable.")
         
     system_prompt = """
     You are an expert AI news analyst. Your task is to evaluate the political bias of the provided article. Classify it as "Left-leaning," "Neutral," or "Right-leaning".
@@ -79,7 +95,12 @@ def analyze_political_bias(article_text: str) -> str | None:
         return response.text.strip()
     except Exception as e:
         print(f"Error during Gemini API call: {e}")
-        return None
+        if "API_KEY" in str(e) or "authentication" in str(e).lower():
+            raise HTTPException(status_code=401, detail="Invalid Google API key. Please check your GOOGLE_API_KEY environment variable.")
+        elif "quota" in str(e).lower() or "limit" in str(e).lower():
+            raise HTTPException(status_code=429, detail="Google API quota exceeded. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Google Gemini API error: {str(e)}")
 
 @app.get("/")
 async def health_check():
@@ -98,13 +119,14 @@ async def analyze_bias(request: Request):
             
         article_text = get_article_content(url)
         if not article_text:
-            raise HTTPException(status_code=404, detail="Failed to extract article content.")
+            raise HTTPException(status_code=404, detail="No article content found. The website might not be supported or the article might be behind a paywall.")
             
         bias_result = analyze_political_bias(article_text)
-        if bias_result is None:
-            raise HTTPException(status_code=500, detail="Failed to analyze political bias.")
         
-        return {"political_bias": bias_result}
+        return {"political_bias": bias_result, "url": url}
+    except HTTPException:
+        # Re-raise HTTP exceptions with their original status codes and messages
+        raise
     except Exception as e:
         print(f"An unexpected error occurred in /analyze_bias: {e}")
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
