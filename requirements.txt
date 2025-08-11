@@ -2,6 +2,7 @@
 
 fastapi
 uvicorn[standard]
+gunicorn
 requests
 beautifulsoup4
 google-generativeai
